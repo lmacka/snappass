@@ -6,3 +6,4 @@ MarkupSafe==2.1.1
 redis==5.1.1
 Werkzeug==3.0.6
 flask-babel
+gunicorn==23.0.0
