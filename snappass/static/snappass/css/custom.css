@@ -224,9 +224,11 @@ input[readonly].readonly-text {
     color: var(--text-primary);
 }
 
-/* Fix for readonly input fields (like share link) */
+/* Fix for readonly input fields and textareas (like share link and secret view) */
 input[readonly],
-input[readonly]:focus {
+input[readonly]:focus,
+textarea[readonly],
+textarea[readonly]:focus {
     background-color: var(--bg-tertiary) !important;
     color: var(--text-primary) !important;
     cursor: text;
