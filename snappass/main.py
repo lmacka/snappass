@@ -45,7 +45,7 @@ elif os.environ.get('REDIS_URL'):
 else:
     redis_host = os.environ.get('REDIS_HOST', 'localhost')
     redis_port = os.environ.get('REDIS_PORT', 6379)
-    redis_password = os.environ.get('REDIS_PASSWORD', 'None')
+    redis_password = os.environ.get('REDIS_PASSWORD')
     redis_db = os.environ.get('SNAPPASS_REDIS_DB', 0)
     redis_client = redis.StrictRedis(
         host=redis_host, port=redis_port, db=redis_db, password=redis_password)
@@ -64,7 +64,7 @@ def check_redis_alive(fn):
                 redis_client.ping()
             return fn(*args, **kwargs)
         except ConnectionError as e:
-            print('Failed to connect to redis! %s' % e.message)
+            print('Failed to connect to redis! %s' % str(e))
             if fn.__name__ == 'main':
                 sys.exit(0)
             else:

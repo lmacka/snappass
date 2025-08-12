@@ -1,10 +1,7 @@
-version: '2'
-
 services:
-
     snappass:
         build: .
-        image: pinterest/snappass
+        image: lmacka/snappass
         ports:
             - "5000:5000"
         stop_signal: SIGINT
