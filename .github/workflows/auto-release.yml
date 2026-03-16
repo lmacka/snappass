@@ -1,0 +1,105 @@
+name: Auto Release
+
+on:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  check-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release || steps.default.outputs.should_release }}
+    steps:
+      - name: Check if release commit (loop prevention)
+        id: loop
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          MSG=$(echo "$COMMIT_MSG" | head -1)
+          if [[ "$MSG" == release:\ v* ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set default output
+        if: steps.loop.outputs.skip == 'true'
+        id: default
+        run: echo "should_release=false" >> $GITHUB_OUTPUT
+
+      - name: Check for qualifying merge
+        if: steps.loop.outputs.skip == 'false'
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Find the PR that was merged for this commit
+          PR_JSON=$(gh api /repos/${{ github.repository }}/commits/${{ github.sha }}/pulls 2>/dev/null || echo "[]")
+
+          AUTHOR=$(echo "$PR_JSON" | jq -r '.[0].user.login // empty')
+          HAS_LABEL=$(echo "$PR_JSON" | jq -r '.[0].labels[]?.name // empty' | grep -c '^release$' || true)
+
+          if [[ "$AUTHOR" == "dependabot[bot]" ]] || [[ "$HAS_LABEL" -gt 0 ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "Qualifying merge detected (author=$AUTHOR, release_label=$HAS_LABEL)"
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "Not a qualifying merge (author=$AUTHOR, release_label=$HAS_LABEL)"
+          fi
+
+  release:
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: bump
+        run: |
+          # Read current version
+          CURRENT=$(grep -oP "(?<=__version__ = ')[^']+" snappass/__init__.py)
+          echo "Current version: $CURRENT"
+
+          # Split and increment patch
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          echo "New version: $NEW_VERSION"
+
+          # Update files
+          sed -i "s/__version__ = '${CURRENT}'/__version__ = '${NEW_VERSION}'/" snappass/__init__.py
+          sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW_VERSION}\"/" pyproject.toml
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit and tag
+        run: |
+          git add snappass/__init__.py pyproject.toml
+          git commit -m "release: v${{ steps.bump.outputs.version }}"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin master --tags
+
+      - name: Dispatch to helm-snappass
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          gh api /repos/lmacka/helm-snappass/dispatches \
+            --method POST \
+            -f "event_type=snappass-release" \
+            -f "client_payload[version]=${{ steps.bump.outputs.version }}"
