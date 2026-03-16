@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snappass"
-version = "2.1.1"
+version = "2.1.2"
 description = "It's like SnapChat... for Passwords."
 readme = "README.md"
 license = "MIT"
