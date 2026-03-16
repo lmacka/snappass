@@ -2,52 +2,53 @@
 SnapPass
 ========
 
-|pypi|
+A zero-knowledge, one-time secret sharing web app. Fork of `Pinterest's SnapPass <https://github.com/pinterest/snappass>`_ with major security and architecture upgrades.
 
-.. |pypi| image:: https://img.shields.io/pypi/v/snappass.svg
-    :target: https://pypi.python.org/pypi/snappass
-    :alt: Latest version released on PyPI
+Share a secret by generating a link. The recipient opens the link, reveals the secret once, and it's permanently deleted. The server never sees your plaintext — encryption and decryption happen entirely in the browser.
 
-It's like SnapChat... for passwords.
+What Changed From Upstream
+--------------------------
 
-This is a web app that lets you share passwords securely.
+This fork rewrites the security model while keeping the same simple UX. Key differences from Pinterest's original:
 
-Let's say you have a password.  You want to give it to your coworker, Jane.
-You could email it to her, but then it's in her email, which might be backed up,
-and probably is in some storage device controlled by the NSA.
+**Zero-knowledge architecture** — Encryption moved from server-side (Python/Fernet) to client-side (browser/AES-256-GCM via Web Crypto API). The server only stores and serves opaque encrypted blobs. Decryption keys live in the URL fragment (``#key``), which browsers never send to the server per RFC 3986. This means:
 
-You could send it to her over chat, but chances are Jane logs all her messages
-because she uses Google Hangouts Chat, and Google Hangouts Chat might log everything.
+- The server cannot decrypt your secrets, even if compromised
+- Decryption keys don't appear in server logs, proxy logs, or access logs
+- Redis contains only ciphertext that is useless without the URL fragment
 
-You could write it down, but you can't find a pen, and there's way too many
-characters because your security person, Paul, is paranoid.
+**Security hardening** — Response headers (CSP, X-Frame-Options, Referrer-Policy, etc.), per-endpoint rate limiting, input size validation (10KB max), and a randomized ``SECRET_KEY`` default with a warning.
 
-So we built SnapPass.  It's not that complicated, it does one thing.  If
-Jane gets a link to the password and never looks at it, the password goes away.
-If the NSA gets a hold of the link, and they look at the password... well they
-have the password.  Also, Jane can't get the password, but now Jane knows that
-not only is someone looking in her email, they are clicking on links.
+**Modernized stack** — Python 3.12, Flask 3.1, ``pyproject.toml`` packaging. Removed all vendored EOL libraries: Bootstrap 3, jQuery, Font Awesome 4, Clipboard.js (over 1MB of dead weight). Replaced with ~300 lines of vanilla CSS and JS with the same dark theme.
 
-Anyway, this took us very little time to write, but we figure we'd save you the
-trouble of writing it yourself, because maybe you are busy and have other things
-to do.  Enjoy.
+**New API** — The v1 and v2 APIs accepted and returned plaintext, which is incompatible with zero-knowledge. They've been replaced by a v3 API that works with pre-encrypted ciphertext. See `API v3`_ below.
 
-Security
---------
+How It Works
+------------
 
-Passwords are encrypted using `Fernet`_ symmetric encryption, from the `cryptography`_ library.
-A random unique key is generated for each password, and is never stored;
-it is rather sent as part of the password link.
-This means that even if someone has access to the Redis store, the passwords are still safe.
+**Creating a secret:**
 
-.. _Fernet: https://cryptography.io/en/latest/fernet/
-.. _cryptography: https://cryptography.io/en/latest/
+1. You type a secret and pick an expiration time
+2. Your browser encrypts the secret with a random AES-256-GCM key (Web Crypto API)
+3. The browser sends only the encrypted blob and TTL to the server
+4. The server stores the blob in Redis and returns a storage key
+5. Your browser constructs the share link: ``https://host/{storage_key}#{crypto_key}``
+6. The ``#crypto_key`` fragment never leaves your browser
+
+**Revealing a secret:**
+
+1. Recipient opens the link and sees a "Reveal secret" button
+2. Clicking it sends a POST to the server (without the ``#fragment``)
+3. The server returns the encrypted blob and deletes it from Redis
+4. The browser decrypts using the key from the URL fragment
+5. The plaintext is displayed. Refreshing the page shows "not found".
 
 Requirements
 ------------
 
 * `Redis`_
-* Python 3.8+
+* Python 3.10+
+* HTTPS (required for Web Crypto API — use a reverse proxy, Cloudflare Tunnel, etc.)
 
 .. _Redis: https://redis.io/
 
@@ -59,248 +60,188 @@ Installation
     $ pip install snappass
     $ snappass
     * Running on http://0.0.0.0:5000/
-    * Restarting with reloader
-
-Configuration
--------------
-
-Start by ensuring that Redis is up and running.
-
-Then, you can configure the following via environment variables.
-
-``SECRET_KEY``: unique key that's used to sign key. This should
-be kept secret.  See the `Flask Documentation`__ for more information.
-
-.. __: http://flask.pocoo.org/docs/quickstart/#sessions
-
-``DEBUG``: to run Flask web server in debug mode.  See the `Flask Documentation`__ for more information.
-
-.. __: http://flask.pocoo.org/docs/quickstart/#debug-mode
-
-``STATIC_URL``: this should be the location of your static assets.  You might not
-need to change this.
-
-``NO_SSL``: if you are not using SSL.
-
-``URL_PREFIX``: useful when running snappass behind a reverse proxy like `nginx`. Example: ``"/some/path/"``, Defaults to ``None``
-
-``REDIS_HOST``: this should be set by Redis, but you can override it if you want. Defaults to ``"localhost"``
-
-``REDIS_PORT``: is the port redis is serving on, defaults to 6379
-
-``REDIS_PASSWORD``: in certain environments authtentication may be a requirement. Defaults to ``"None"``
-
-``SNAPPASS_REDIS_DB``: is the database that you want to use on this redis server. Defaults to db 0
-
-``REDIS_URL``: (optional) will be used instead of ``REDIS_HOST``, ``REDIS_PORT``, and ``SNAPPASS_REDIS_DB`` to configure the Redis client object. For example: redis://username:password@localhost:6379/0
-
-``REDIS_PREFIX``: (optional, defaults to ``"snappass"``) prefix used on redis keys to prevent collisions with other potential clients
-
-``HOST_OVERRIDE``: (optional) Used to override the base URL if the app is unaware. Useful when running behind reverse proxies like an identity-aware SSO. Example: ``sub.domain.com``
-
-``SNAPPASS_BIND_ADDRESS``: (optional) Used to override the default bind address of 0.0.0.0 for flask app Example: ``127.0.0.1``
-
-``SNAPPASS_PORT``: (optional) Used to override the default port of 5000 Example: ``6000``
-
-APIs
-----
-
-SnapPass has 2 APIs :
-1. A simple API : That can be used to create passwords links, and then share them with users
-2. A more REST-y API : Which facilitate programmatic interactions with SnapPass, without having to parse HTML content when retrieving the password
-
-Simple API
-^^^^^^^^^^
-
-The advantage of using the simple API is that you can create a password and retrieve the link without having to open the web interface. This is useful if you want to embed it in a script or use it in a CI/CD pipeline.
-
-To create a password, send a POST request to ``/api/set_password`` like so:
-
-::
-
-    $ curl -X POST -H "Content-Type: application/json"  -d '{"password": "foobar"}' http://localhost:5000/api/set_password/
-
-This will return a JSON response with the password link:
-
-::
-
-    {
-        "link": "http://127.0.0.1:5000/snappassbedf19b161794fd288faec3eba15fa41~hHnILpQ50ZfJc3nurDfHCb_22rBr5gGEya68e_cZOrY%3D",
-        "ttl":1209600
-    }
-
-the default TTL is 2 weeks (1209600 seconds), but you can override it by adding a expiration parameter:
-
-::
-
-    $ curl -X POST -H "Content-Type: application/json"  -d '{"password": "foobar", "ttl": 3600 }' http://localhost:5000/api/set_password/
-
-
-REST API
-^^^^^^^^
-
-The advantage of using the REST API is that you can fully manage the lifecycle of the password stored in SnapPass without having to interact with any web user interface.
-
-This is useful if you want to embed it in a script,  use it in a CI/CD pipeline or share it between multiple client applications.
-
-Create a password
-"""""""""""""""""
-
-To create a password, send a POST request to ``/api/v2/passwords`` like so:
-
-::
-
-    $ curl -X POST -H "Content-Type: application/json"  -d '{"password": "foobar"}' http://localhost:5000/api/v2/passwords
-
-This will return a JSON response with a token and the password link:
-
-::
-
-    {
-        "token": "snappassbedf19b161794fd288faec3eba15fa41~hHnILpQ50ZfJc3nurDfHCb_22rBr5gGEya68e_cZOrY=",
-        "links": [{
-            "rel": "self",
-            "href": "http://127.0.0.1:5000/api/v2/passwords/snappassbedf19b161794fd288faec3eba15fa41~hHnILpQ50ZfJc3nurDfHCb_22rBr5gGEya68e_cZOrY%3D",
-        },{
-            "rel": "web-view",
-            "href": "http://127.0.0.1:5000/snappassbedf19b161794fd288faec3eba15fa41~hHnILpQ50ZfJc3nurDfHCb_22rBr5gGEya68e_cZOrY%3D",
-        }],
-        "ttl":1209600
-    }
-
-The default TTL is 2 weeks (1209600 seconds), but you can override it by adding a expiration parameter:
-
-::
-
-    $ curl -X POST -H "Content-Type: application/json"  -d '{"password": "foobar", "ttl": 3600 }' http://localhost:5000/api/v2/passwords
-
-If the password is null or empty, and the TTL is larger than the max TTL of the application, the API will return an error like this:
-
-
-Otherwise, the API will return a 404 (Not Found) response like so:
-
-::
-
-    {
-        "invalid-params": [{
-            "name": "password",
-            "reason": "The password is required and should not be null or empty."
-        }, {
-            "name": "ttl",
-            "reason": "The specified TTL is longer than the maximum supported."
-        }],
-        "title": "The password and/or the TTL are invalid.",
-        "type": "https://127.0.0.1:5000/set-password-validation-error"
-    }
-
-Check if a password exists
-""""""""""""""""""""""""""
-
-To check if a password exists, send a HEAD request to ``/api/v2/passwords/<token>``, where ``<token>`` is the token of the API response when a password is created (url encoded), or simply use the `self` link:
-
-::
-
-    $ curl --head http://localhost:5000/api/v2/passwords/snappassbedf19b161794fd288faec3eba15fa41~hHnILpQ50ZfJc3nurDfHCb_22rBr5gGEya68e_cZOrY%3D
-
-If :
-- the passwork_key is valid
-- the password :
-  - exists,
-  - has not been read
-  - is not expired
-
-Then the API will return a 200 (OK) response like so:
-
-::
-
-    HTTP/1.1 200 OK
-    Server: Werkzeug/3.0.1 Python/3.12.2
-    Date: Fri, 29 Mar 2024 22:15:54 GMT
-    Content-Type: text/html; charset=utf-8
-    Content-Length: 0
-    Connection: close
-
-Otherwise, the API will return a 404 (Not Found) response like so:
-
-::
-
-    HTTP/1.1 404 NOT FOUND
-    Server: Werkzeug/3.0.1 Python/3.12.2
-    Date: Fri, 29 Mar 2024 22:19:29 GMT
-    Content-Type: text/html; charset=utf-8
-    Content-Length: 0
-    Connection: close
-
-
-Read a password
-"""""""""""""""
-
-To read a password, send a GET request to ``/api/v2/passwords/<password_key>``, where ``<password_key>`` is the token of the API response when a password is created, or simply use the `self` link:
-
-::
-
-    $ curl -X GET http://localhost:5000/api/v2/passwords/snappassbedf19b161794fd288faec3eba15fa41~hHnILpQ50ZfJc3nurDfHCb_22rBr5gGEya68e_cZOrY%3D
-
-If :
-- the token is valid
-- the password :
-  - exists
-  - has not been read
-  - is not expired
-
-Then the API will return a 200 (OK) with a JSON response containing the password :
-
-::
-
-    {
-        "password": "foobar"
-    }
-
-Otherwise, the API will return a 404 (Not Found) response like so:
-
-::
-
-    {
-        "invalid-params": [{
-            "name": "token"
-        }],
-        "title": "The password doesn't exist.",
-        "type": "https://127.0.0.1:5000/get-password-error"
-    }
-
-Notes on APIs
-^^^^^^^^^^^^^
-
-Notes:
-
-- When using the APIs, you can specify any ttl, as long as it is lower than the default.
-- The password is passed in the body of the request rather than in the URL. This is to prevent the password from being logged in the server logs.
-- Depending on the environment you are running it, you might want to expose the ``/api`` endpoint to your internal network only, and put the web interface behind authentication.
-
 
 Docker
 ------
 
-Alternatively, you can use `Docker`_ and `Docker Compose`_ to install and run SnapPass:
+::
 
-.. _Docker: https://www.docker.com/
-.. _Docker Compose: https://docs.docker.com/compose/
+    $ docker compose up -d
+
+This starts SnapPass and Redis. The app is accessible at http://localhost:5000.
+
+Pre-built multi-arch images (amd64/arm64) are available:
+
+- ``lmacka/snappass:latest`` — latest release
+- ``lmacka/snappass:dev`` — latest dev branch build
+- ``ghcr.io/lmacka/snappass:latest`` — same, from GitHub Container Registry
+
+Configuration
+-------------
+
+All configuration is via environment variables. Start by ensuring Redis is running.
+
+``SECRET_KEY``: Used to sign Flask sessions. If not set, a random key is generated on
+startup and a warning is logged. Set this in production to persist sessions across restarts.
+
+``REDIS_URL``: (optional) Full Redis connection URL. Takes precedence over individual host/port/db settings. Example: ``redis://username:password@localhost:6379/0``
+
+``REDIS_HOST``: Redis hostname. Defaults to ``"localhost"``
+
+``REDIS_PORT``: Redis port. Defaults to ``6379``
+
+``REDIS_PASSWORD``: Redis authentication password. Defaults to ``None``
+
+``SNAPPASS_REDIS_DB``: Redis database number. Defaults to ``0``
+
+``REDIS_PREFIX``: (optional) Prefix for Redis keys to prevent collisions. Defaults to ``"snappass"``
+
+``NO_SSL``: Set to ``True`` if not using SSL. Defaults to ``False``
+
+``URL_PREFIX``: (optional) Path prefix when running behind a reverse proxy. Example: ``"/snappass/"``
+
+``HOST_OVERRIDE``: (optional) Override the base URL. Useful behind reverse proxies or SSO. Example: ``"secrets.example.com"``
+
+``SNAPPASS_BIND_ADDRESS``: (optional) Bind address. Defaults to ``"0.0.0.0"``
+
+``SNAPPASS_PORT``: (optional) Port. Defaults to ``5000``
+
+``GUNICORN_WORKERS``: (optional) Number of gunicorn workers. Defaults to ``3``
+
+``DEBUG``: Enable Flask debug mode.
+
+``STATIC_URL``: Location of static assets. Defaults to ``"static"``
+
+API v3
+------
+
+The v3 API is zero-knowledge: it accepts and returns pre-encrypted ciphertext. Your application is responsible for encryption and decryption using any algorithm you choose.
+
+The previous v1 (``/api/set_password/``) and v2 (``/api/v2/passwords``) APIs have been removed because they accepted plaintext secrets, which is incompatible with the zero-knowledge architecture.
+
+Store a secret
+^^^^^^^^^^^^^^
 
 ::
 
-    $ docker-compose up -d
+    $ curl -X POST -H "Content-Type: application/json" \
+        -d '{"ciphertext": "BASE64_ENCRYPTED_DATA", "ttl": 3600}' \
+        https://localhost:5000/api/v3/secrets
 
-This will pull all dependencies, i.e. Redis and appropriate Python version (3.7), then start up SnapPass and Redis server. SnapPass server is accessible at: http://localhost:5000
+Response (``201 Created``):
 
-Similar Tools
--------------
+::
 
-- `Snappass.NET <https://github.com/generateui/Snappass.NET>`_ is a .NET
-  (ASP.NET Core) port of SnapPass.
+    {
+        "key": "snappass1a2b3c4d5e6f...",
+        "ttl": 3600
+    }
 
+The default TTL is 2 weeks (1209600 seconds). Maximum TTL is also 2 weeks. Maximum ciphertext size is 10KB.
 
-We're Hiring!
--------------
+Check if a secret exists
+^^^^^^^^^^^^^^^^^^^^^^^^
 
-Are you really excited about open-source and great software engineering?
-`Pinterest is hiring <https://careers.pinterest.com>`_!
+::
+
+    $ curl --head https://localhost:5000/api/v3/secrets/snappass1a2b3c4d5e6f...
+
+Returns ``200 OK`` if the secret exists, ``404 Not Found`` otherwise. This does not consume the secret.
+
+Retrieve a secret
+^^^^^^^^^^^^^^^^^
+
+::
+
+    $ curl https://localhost:5000/api/v3/secrets/snappass1a2b3c4d5e6f...
+
+Response (``200 OK``):
+
+::
+
+    {
+        "ciphertext": "BASE64_ENCRYPTED_DATA"
+    }
+
+This is a one-time retrieval — the secret is deleted from the server immediately. Subsequent requests return ``404``.
+
+Example: full lifecycle with Python
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+::
+
+    import base64, json, os, requests
+    from cryptography.fernet import Fernet
+
+    # Encrypt client-side
+    key = Fernet.generate_key()
+    ciphertext = Fernet(key).encrypt(b"hunter2").decode()
+
+    # Store
+    r = requests.post("https://snappass.example.com/api/v3/secrets",
+                       json={"ciphertext": ciphertext, "ttl": 3600})
+    storage_key = r.json()["key"]
+
+    # Retrieve and decrypt
+    r = requests.get(f"https://snappass.example.com/api/v3/secrets/{storage_key}")
+    plaintext = Fernet(key).decrypt(r.json()["ciphertext"].encode())
+    print(plaintext.decode())  # "hunter2"
+
+Example: full lifecycle with curl + openssl
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+::
+
+    # Generate a key and encrypt
+    KEY=$(openssl rand -base64 32)
+    CIPHERTEXT=$(echo -n "hunter2" | openssl enc -aes-256-cbc -base64 -pass pass:$KEY 2>/dev/null)
+
+    # Store
+    STORAGE_KEY=$(curl -s -X POST -H "Content-Type: application/json" \
+        -d "{\"ciphertext\": \"$CIPHERTEXT\", \"ttl\": 3600}" \
+        https://snappass.example.com/api/v3/secrets | jq -r .key)
+
+    # Retrieve and decrypt
+    curl -s https://snappass.example.com/api/v3/secrets/$STORAGE_KEY \
+        | jq -r .ciphertext | openssl enc -aes-256-cbc -d -base64 -pass pass:$KEY 2>/dev/null
+
+Health Check
+------------
+
+::
+
+    $ curl https://localhost:5000/_/_/health
+
+Returns ``200 OK`` with ``{}`` if the app and Redis are healthy.
+
+Internationalization
+--------------------
+
+SnapPass supports English, German, Spanish, Dutch, and French via Flask-Babel. The language is selected automatically from the browser's ``Accept-Language`` header.
+
+To update translations::
+
+    $ pybabel extract -F babel.cfg -o messages.pot .
+    $ pybabel update -i messages.pot -d snappass/translations
+    $ pybabel compile -d snappass/translations
+
+Development
+-----------
+
+::
+
+    $ pip install -r dev-requirements.txt
+    $ MOCK_REDIS=1 pytest tests.py -v
+
+Tests use ``fakeredis`` so no Redis server is needed. Time-dependent tests use ``freezegun``.
+
+Lint::
+
+    $ flake8 --max-line-length=120
+
+CI runs tests across Python 3.10, 3.11, and 3.12 via tox.
+
+Origins
+-------
+
+Originally built at `Pinterest <https://github.com/pinterest/snappass>`_.
