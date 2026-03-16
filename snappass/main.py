@@ -12,6 +12,8 @@ from flask_limiter.util import get_remote_address
 # _ is required to get the Jinja templates translated
 from flask_babel import Babel, _  # noqa: F401
 
+from snappass import __version__
+
 
 def strtobool(val):
     val = str(val).lower().strip()
@@ -93,6 +95,15 @@ limiter = Limiter(
     storage_uri=_get_limiter_storage_uri(),
     default_limits=[],
 )
+
+print(f'snappass {__version__} | ssl={"off" if NO_SSL else "on"} '
+      f'prefix={URL_PREFIX or "/"} host={HOST_OVERRIDE or "auto"} '
+      f'redis_prefix={REDIS_PREFIX}', file=sys.stderr)
+
+
+@app.context_processor
+def inject_version():
+    return dict(version=__version__)
 
 
 def check_redis_alive(fn):
