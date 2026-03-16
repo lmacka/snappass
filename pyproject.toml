@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snappass"
-version = "2.0.0"
+version = "2.1.1"
 description = "It's like SnapChat... for Passwords."
-readme = "README.rst"
+readme = "README.md"
 license = "MIT"
 requires-python = ">= 3.10"
 authors = [
@@ -34,7 +34,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "http://github.com/Pinterest/snappass/"
+Homepage = "https://github.com/lmacka/snappass"
 
 [project.scripts]
 snappass = "snappass.main:main"
