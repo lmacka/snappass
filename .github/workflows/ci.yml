@@ -4,16 +4,18 @@ on:
   push:
     branches:
       - master
+      - dev
   pull_request:
     branches:
       - master
+      - dev
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.8', '3.9', '3.10']
+        python-version: ['3.10', '3.11', '3.12']
 
     steps:
     - uses: actions/checkout@v4
@@ -31,7 +33,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install tox tox-gh-actions
     - name: Lint
-      if: matrix.python-version == '3.10'
+      if: matrix.python-version == '3.12'
       run: tox -e flake8
     - name: Tests
       run: tox

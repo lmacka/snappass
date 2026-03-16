@@ -1,23 +1,23 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container">
-  <section>
-    <div class="page-header">
-      <h1>{{ _('Secret') }}</h1>
-    </div>
-    <p class="lead">{{ _('You can only reveal the secret once!') }}</p>
-    <div class="row">
-      <div class="col-sm-6 margin-bottom-10">
-        <button id="revealSecret" type="button" class="btn-lg btn-primary">{{ _('Reveal secret') }}</button>
-      </div>
-    </div>
-  </section>
-</div>
+<section class="content-section">
+  <div class="page-header">
+    <h1>{{ _('Secret') }}</h1>
+  </div>
+  <p class="lead">{{ _('You can only reveal the secret once!') }}</p>
+  <div class="form-row">
+    <button id="revealSecret" type="button" class="btn btn-primary btn-lg">{{ _('Reveal secret') }}</button>
+  </div>
+</section>
+
+<!-- Hidden i18n strings for JS -->
+<span id="secret-title" hidden>{{ _('Secret') }}</span>
+<span id="save-prompt" hidden>{{ _('Save the following secret to a secure location.') }}</span>
+<span id="deleted-notice" hidden>{{ _('The secret has now been permanently deleted from the system, and the URL will no longer work. Refresh this page to verify.') }}</span>
 {% endblock %}
 
 {% block js %}
-<script src="{{ config.STATIC_URL }}/clipboardjs/clipboard.min.js"></script>
-<script src="{{ config.STATIC_URL }}/snappass/scripts/clipboard_button.js"></script>
-<script src="{{ config.STATIC_URL }}/snappass/scripts/preview.js"></script>
+<script src="{{ config.STATIC_URL }}/snappass/scripts/crypto.js"></script>
+<script src="{{ config.STATIC_URL }}/snappass/scripts/app.js"></script>
 {% endblock %}

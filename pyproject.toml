@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "snappass"
+version = "2.0.0"
+description = "It's like SnapChat... for Passwords."
+readme = "README.rst"
+license = "MIT"
+requires-python = ">= 3.10"
+authors = [
+    {name = "Dave Dash", email = "dd+github@davedash.com"},
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "Flask>=3.1.0",
+    "redis>=5.0.0",
+    "cryptography>=43.0.0",
+    "flask-babel>=4.0.0",
+    "gunicorn>=23.0.0",
+    "flask-limiter[redis]>=3.5.0",
+]
+
+[project.urls]
+Homepage = "http://github.com/Pinterest/snappass/"
+
+[project.scripts]
+snappass = "snappass.main:main"
+
+[tool.setuptools.packages.find]
+include = ["snappass*"]
+
+[tool.setuptools.package-data]
+snappass = ["static/**/*", "templates/*", "translations/**/*"]

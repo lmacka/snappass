@@ -1,356 +1,293 @@
-import re
-import time
 import unittest
-import uuid
 from unittest import TestCase
-from unittest import mock
-from urllib.parse import quote
-from urllib.parse import unquote
 
-from cryptography.fernet import Fernet
 from freezegun import freeze_time
-from werkzeug.exceptions import BadRequest
-from fakeredis import FakeStrictRedis
 
 # noinspection PyPep8Naming
 import snappass.main as snappass
 
-__author__ = 'davedash'
 
+class SnapPassCoreTestCase(TestCase):
 
-class SnapPassTestCase(TestCase):
+    def test_store_and_retrieve_secret(self):
+        ciphertext = b'encrypted-blob-data'
+        key = snappass.store_secret(ciphertext, 30)
+        result = snappass.retrieve_secret(key)
+        self.assertEqual(ciphertext, result)
 
-    @mock.patch('redis.client.StrictRedis', FakeStrictRedis)
-    def test_get_password(self):
-        password = "melatonin overdose 1337!$"
-        key = snappass.set_password(password, 30)
-        self.assertEqual(password, snappass.get_password(key))
-        # Assert that we can't look this up a second time.
-        self.assertIsNone(snappass.get_password(key))
+    def test_retrieve_deletes_from_redis(self):
+        ciphertext = b'one-time-data'
+        key = snappass.store_secret(ciphertext, 30)
+        self.assertIsNotNone(snappass.retrieve_secret(key))
+        self.assertIsNone(snappass.retrieve_secret(key))
 
-    def test_password_is_not_stored_in_plaintext(self):
-        password = "trustno1"
-        token = snappass.set_password(password, 30)
-        redis_key = token.split(snappass.TOKEN_SEPARATOR)[0]
-        stored_password_text = snappass.redis_client.get(redis_key).decode('utf-8')
-        self.assertNotIn(password, stored_password_text)
+    def test_secret_exists(self):
+        ciphertext = b'check-existence'
+        key = snappass.store_secret(ciphertext, 30)
+        self.assertTrue(snappass.secret_exists(key))
+        snappass.retrieve_secret(key)
+        self.assertFalse(snappass.secret_exists(key))
 
-    def test_returned_token_format(self):
-        password = "trustsome1"
-        token = snappass.set_password(password, 30)
-        token_fragments = token.split(snappass.TOKEN_SEPARATOR)
-        self.assertEqual(2, len(token_fragments))
-        redis_key, encryption_key = token_fragments
-        self.assertEqual(32 + len(snappass.REDIS_PREFIX), len(redis_key))
-        try:
-            Fernet(encryption_key.encode('utf-8'))
-        except ValueError:
-            self.fail('the encryption key is not valid')
+    def test_ciphertext_stored_as_is(self):
+        ciphertext = b'opaque-encrypted-content'
+        key = snappass.store_secret(ciphertext, 30)
+        stored = snappass.redis_client.get(key)
+        self.assertEqual(ciphertext, stored)
 
-    def test_encryption_key_is_returned(self):
-        password = "trustany1"
-        token = snappass.set_password(password, 30)
-        token_fragments = token.split(snappass.TOKEN_SEPARATOR)
-        redis_key, encryption_key = token_fragments
-        stored_password = snappass.redis_client.get(redis_key)
-        fernet = Fernet(encryption_key.encode('utf-8'))
-        decrypted_password = fernet.decrypt(stored_password).decode('utf-8')
-        self.assertEqual(password, decrypted_password)
+    @freeze_time("2020-05-08 12:00:00")
+    def test_secret_before_expiration(self):
+        ciphertext = b'time-test'
+        key = snappass.store_secret(ciphertext, 30)
+        self.assertEqual(ciphertext, snappass.retrieve_secret(key))
 
-    def test_unencrypted_passwords_still_work(self):
-        unencrypted_password = "trustevery1"
-        storage_key = uuid.uuid4().hex
-        snappass.redis_client.setex(storage_key, 30, unencrypted_password)
-        retrieved_password = snappass.get_password(storage_key)
-        self.assertEqual(unencrypted_password, retrieved_password)
-
-    def test_password_is_decoded(self):
-        password = "correct horse battery staple"
-        key = snappass.set_password(password, 30)
-        self.assertFalse(isinstance(snappass.get_password(key), bytes))
-
-    def test_clean_input(self):
-        # Test Bad Data
-        with snappass.app.test_request_context(
-                "/", data={'password': 'foo', 'ttl': 'bar'}, method='POST'):
-            self.assertRaises(BadRequest, snappass.clean_input)
-
-        # No Password
-        with snappass.app.test_request_context(
-                "/", method='POST'):
-            self.assertRaises(BadRequest, snappass.clean_input)
-
-        # No TTL
-        with snappass.app.test_request_context(
-                "/", data={'password': 'foo'}, method='POST'):
-            self.assertRaises(BadRequest, snappass.clean_input)
-
-        with snappass.app.test_request_context(
-                "/", data={'password': 'foo', 'ttl': 'hour'}, method='POST'):
-            self.assertEqual((3600, 'foo'), snappass.clean_input())
-
-    def test_password_before_expiration(self):
-        password = 'fidelio'
-        key = snappass.set_password(password, 1)
-        self.assertEqual(password, snappass.get_password(key))
-
-    def test_password_after_expiration(self):
-        password = 'open sesame'
-        key = snappass.set_password(password, 1)
-        time.sleep(1.5)
-        self.assertIsNone(snappass.get_password(key))
+    @freeze_time("2020-05-08 12:00:00", auto_tick_seconds=2)
+    def test_secret_after_expiration(self):
+        ciphertext = b'expiring-data'
+        key = snappass.store_secret(ciphertext, 1)
+        # auto_tick_seconds=2 means next call is 2 seconds later
+        self.assertIsNone(snappass.retrieve_secret(key))
 
 
 class SnapPassRoutesTestCase(TestCase):
-    # noinspection PyPep8Naming
+
     def setUp(self):
         snappass.app.config['TESTING'] = True
         self.app = snappass.app.test_client()
 
     def test_health_check(self):
         response = self.app.get('/_/_/health')
-        self.assertEqual('200 OK', response.status)
-        self.assertEqual('{}', response.get_data(as_text=True).strip())
+        self.assertEqual(200, response.status_code)
 
-    def test_preview_password(self):
-        password = "I like novelty kitten statues!"
-        key = snappass.set_password(password, 30)
-        rv = self.app.get('/{0}'.format(key))
-        self.assertNotIn(password, rv.get_data(as_text=True))
+    def test_index_page(self):
+        response = self.app.get('/')
+        self.assertEqual(200, response.status_code)
 
-    def test_show_password(self):
-        password = "I like novelty kitten statues!"
-        key = snappass.set_password(password, 30)
-        rv = self.app.post('/{0}'.format(key))
-        self.assertIn(password, rv.get_data(as_text=True))
-
-    def test_url_prefix(self):
-        password = "I like novelty kitten statues!"
-        snappass.URL_PREFIX = "/test/prefix"
-        rv = self.app.post('/', data={'password': password, 'ttl': 'hour'})
-        self.assertIn("localhost/test/prefix/", rv.get_data(as_text=True))
-
-    def test_set_password(self):
-        with freeze_time("2020-05-08 12:00:00") as frozen_time:
-            password = 'my name is my passport. verify me.'
-            rv = self.app.post('/', data={'password': password, 'ttl': 'two weeks'})
-
-            html_content = rv.data.decode("ascii")
-            key = re.search(r'id="password-link" value="https://localhost/([^"]+)', html_content).group(1)
-            key = unquote(key)
-
-            frozen_time.move_to("2020-05-22 11:59:59")
-            self.assertEqual(snappass.get_password(key), password)
-
-            frozen_time.move_to("2020-05-22 12:00:00")
-            self.assertIsNone(snappass.get_password(key))
-
-    def test_set_password_json(self):
-        with freeze_time("2020-05-08 12:00:00") as frozen_time:
-            password = 'my name is my passport. verify me.'
-            rv = self.app.post(
-                '/',
-                headers={'Accept': 'application/json'},
-                data={'password': password, 'ttl': 'two weeks'},
-            )
-
-            json_content = rv.get_json()
-            key = re.search(r'https://localhost/([^"]+)', json_content['link']).group(1)
-            key = unquote(key)
-
-            frozen_time.move_to("2020-05-22 11:59:59")
-            self.assertEqual(snappass.get_password(key), password)
-
-            frozen_time.move_to("2020-05-22 12:00:00")
-            self.assertIsNone(snappass.get_password(key))
-
-    def test_set_password_api(self):
-        with freeze_time("2020-05-08 12:00:00") as frozen_time:
-            password = 'my name is my passport. verify me.'
-            rv = self.app.post(
-                '/api/set_password/',
-                headers={'Accept': 'application/json'},
-                json={'password': password, 'ttl': '1209600'},
-            )
-
-            json_content = rv.get_json()
-            key = re.search(r'https://localhost/([^"]+)', json_content['link']).group(1)
-            key = unquote(key)
-
-            frozen_time.move_to("2020-05-22 11:59:59")
-            self.assertEqual(snappass.get_password(key), password)
-
-            frozen_time.move_to("2020-05-22 12:00:00")
-            self.assertIsNone(snappass.get_password(key))
-
-    def test_set_password_api_default_ttl(self):
-        with freeze_time("2020-05-08 12:00:00") as frozen_time:
-            password = 'my name is my passport. verify me.'
-            rv = self.app.post(
-                '/api/set_password/',
-                headers={'Accept': 'application/json'},
-                json={'password': password},
-            )
-
-            json_content = rv.get_json()
-            key = re.search(r'https://localhost/([^"]+)', json_content['link']).group(1)
-            key = unquote(key)
-
-            frozen_time.move_to("2020-05-22 11:59:59")
-            self.assertEqual(snappass.get_password(key), password)
-
-            frozen_time.move_to("2020-05-22 12:00:00")
-            self.assertIsNone(snappass.get_password(key))
-
-    def test_set_password_api_v2(self):
-        with freeze_time("2020-05-08 12:00:00") as frozen_time:
-            password = 'my name is my passport. verify me.'
-            rv = self.app.post(
-                '/api/v2/passwords',
-                headers={'Accept': 'application/json'},
-                json={'password': password, 'ttl': '1209600'},
-            )
-
-            json_content = rv.get_json()
-            key = unquote(json_content['token'])
-
-            frozen_time.move_to("2020-05-22 11:59:59")
-            self.assertEqual(snappass.get_password(key), password)
-
-            frozen_time.move_to("2020-05-22 12:00:00")
-            self.assertIsNone(snappass.get_password(key))
-
-    def test_set_password_api_v2_default_ttl(self):
-        with freeze_time("2020-05-08 12:00:00") as frozen_time:
-            password = 'my name is my passport. verify me.'
-            rv = self.app.post(
-                '/api/v2/passwords',
-                headers={'Accept': 'application/json'},
-                json={'password': password},
-            )
-
-            json_content = rv.get_json()
-            key = unquote(json_content['token'])
-
-            frozen_time.move_to("2020-05-22 11:59:59")
-            self.assertEqual(snappass.get_password(key), password)
-
-            frozen_time.move_to("2020-05-22 12:00:00")
-            self.assertIsNone(snappass.get_password(key))
-
-    def test_set_password_api_v2_no_password(self):
+    def test_create_secret_returns_key(self):
         rv = self.app.post(
-            '/api/v2/passwords',
-            headers={'Accept': 'application/json'},
-            json={'password': ''},
+            '/',
+            json={'ciphertext': 'encrypted-data', 'ttl': 3600},
+            content_type='application/json',
         )
+        self.assertEqual(200, rv.status_code)
+        data = rv.get_json()
+        self.assertIn('key', data)
+        self.assertTrue(data['key'].startswith(snappass.REDIS_PREFIX))
 
-        self.assertEqual(rv.status_code, 400)
-
-        json_content = rv.get_json()
-        invalid_params = json_content['invalid-params']
-        self.assertEqual(len(invalid_params), 1)
-        bad_password = invalid_params[0]
-        self.assertEqual(bad_password['name'], 'password')
-
-    def test_set_password_api_v2_too_big_ttl(self):
-        password = 'my name is my passport. verify me.'
+    def test_create_secret_missing_ciphertext(self):
         rv = self.app.post(
-            '/api/v2/passwords',
-            headers={'Accept': 'application/json'},
-            json={'password': password, 'ttl': '1209600000'},
+            '/',
+            json={'ttl': 3600},
+            content_type='application/json',
         )
+        self.assertEqual(400, rv.status_code)
 
-        self.assertEqual(rv.status_code, 400)
-
-        json_content = rv.get_json()
-        invalid_params = json_content['invalid-params']
-        self.assertEqual(len(invalid_params), 1)
-        bad_ttl = invalid_params[0]
-        self.assertEqual(bad_ttl['name'], 'ttl')
-
-    def test_set_password_api_v2_no_password_and_too_big_ttl(self):
+    def test_create_secret_missing_ttl(self):
         rv = self.app.post(
-            '/api/v2/passwords',
-            headers={'Accept': 'application/json'},
-            json={'password': '', 'ttl': '1209600000'},
+            '/',
+            json={'ciphertext': 'data'},
+            content_type='application/json',
         )
+        self.assertEqual(400, rv.status_code)
 
-        self.assertEqual(rv.status_code, 400)
-
-        json_content = rv.get_json()
-        invalid_params = json_content['invalid-params']
-        self.assertEqual(len(invalid_params), 2)
-        bad_password = invalid_params[0]
-        self.assertEqual(bad_password['name'], 'password')
-        bad_ttl = invalid_params[1]
-        self.assertEqual(bad_ttl['name'], 'ttl')
-
-    def test_check_password_api_v2(self):
-        password = 'my name is my passport. verify me.'
+    def test_create_secret_negative_ttl(self):
         rv = self.app.post(
-            '/api/v2/passwords',
-            headers={'Accept': 'application/json'},
-            json={'password': password},
+            '/',
+            json={'ciphertext': 'data', 'ttl': -1},
+            content_type='application/json',
         )
+        self.assertEqual(400, rv.status_code)
 
-        json_content = rv.get_json()
-        key = unquote(json_content['token'])
-
-        rvc = self.app.head('/api/v2/passwords/' + quote(key))
-        self.assertEqual(rvc.status_code, 200)
-
-    def test_check_password_api_v2_bad_keys(self):
-        password = 'my name is my passport. verify me.'
+    def test_create_secret_excessive_ttl(self):
         rv = self.app.post(
-            '/api/v2/passwords',
-            headers={'Accept': 'application/json'},
-            json={'password': password},
+            '/',
+            json={'ciphertext': 'data', 'ttl': 99999999},
+            content_type='application/json',
         )
+        self.assertEqual(400, rv.status_code)
 
-        json_content = rv.get_json()
-        key = unquote(json_content['token'])
-
-        rvc = self.app.head('/api/v2/passwords/' + quote(key[::-1]))
-        self.assertEqual(rvc.status_code, 404)
-
-    def test_retrieve_password_api_v2(self):
-        password = 'my name is my passport. verify me.'
+    def test_create_secret_oversized_ciphertext(self):
+        big_data = 'x' * (snappass.MAX_CIPHERTEXT_SIZE + 1)
         rv = self.app.post(
-            '/api/v2/passwords',
-            headers={'Accept': 'application/json'},
-            json={'password': password},
+            '/',
+            json={'ciphertext': big_data, 'ttl': 3600},
+            content_type='application/json',
         )
+        self.assertEqual(413, rv.status_code)
 
-        json_content = rv.get_json()
-        key = unquote(json_content['token'])
+    def test_preview_existing_secret(self):
+        key = snappass.store_secret(b'preview-test', 30)
+        rv = self.app.get(f'/{key}')
+        self.assertEqual(200, rv.status_code)
+        self.assertNotIn(b'preview-test', rv.data)
 
-        rvc = self.app.get('/api/v2/passwords/' + quote(key))
-        self.assertEqual(rv.status_code, 200)
+    def test_preview_nonexistent_secret(self):
+        rv = self.app.get('/snappassnonexistent')
+        self.assertEqual(404, rv.status_code)
 
-        json_content_retrieved = rvc.get_json()
-        retrieved_password = json_content_retrieved['password']
-        self.assertEqual(retrieved_password, password)
+    def test_reveal_returns_ciphertext(self):
+        key = snappass.store_secret(b'reveal-blob', 30)
+        rv = self.app.post(f'/{key}')
+        self.assertEqual(200, rv.status_code)
+        data = rv.get_json()
+        self.assertEqual('reveal-blob', data['ciphertext'])
 
-    def test_retrieve_password_api_v2_bad_keys(self):
-        password = 'my name is my passport. verify me.'
+    def test_reveal_deletes_secret(self):
+        key = snappass.store_secret(b'one-time', 30)
+        rv = self.app.post(f'/{key}')
+        self.assertEqual(200, rv.status_code)
+        rv2 = self.app.post(f'/{key}')
+        self.assertEqual(404, rv2.status_code)
+
+    def test_reveal_nonexistent_returns_404(self):
+        rv = self.app.post('/snappassnonexistent')
+        self.assertEqual(404, rv.status_code)
+
+    def test_old_tilde_token_rejected(self):
+        """Tokens with ~ (old format) should not match any route or be valid keys."""
+        rv = self.app.get('/snappassfake~oldkey')
+        self.assertEqual(404, rv.status_code)
+
+
+class SnapPassSecurityTestCase(TestCase):
+
+    def setUp(self):
+        snappass.app.config['TESTING'] = True
+        self.app = snappass.app.test_client()
+
+    def test_security_headers_present(self):
+        rv = self.app.get('/')
+        self.assertEqual('DENY', rv.headers.get('X-Frame-Options'))
+        self.assertEqual('nosniff', rv.headers.get('X-Content-Type-Options'))
+        self.assertEqual('no-referrer', rv.headers.get('Referrer-Policy'))
+        self.assertIn('camera=()', rv.headers.get('Permissions-Policy'))
+        self.assertIn("default-src 'self'", rv.headers.get('Content-Security-Policy'))
+        self.assertIn("frame-ancestors 'none'", rv.headers.get('Content-Security-Policy'))
+
+    def test_security_headers_on_api(self):
         rv = self.app.post(
-            '/api/v2/passwords',
-            headers={'Accept': 'application/json'},
-            json={'password': password},
+            '/api/v3/secrets',
+            json={'ciphertext': 'test', 'ttl': 3600},
+            content_type='application/json',
         )
+        self.assertEqual('no-referrer', rv.headers.get('Referrer-Policy'))
 
-        json_content = rv.get_json()
-        key = unquote(json_content['token'])
+    def test_security_headers_on_404(self):
+        rv = self.app.get('/snappassnonexistent')
+        self.assertEqual('DENY', rv.headers.get('X-Frame-Options'))
 
-        rvc = self.app.get('/api/v2/passwords/' + quote(key[::-1]))
-        self.assertEqual(rvc.status_code, 404)
 
-        json_content_retrieved = rvc.get_json()
-        invalid_params = json_content_retrieved['invalid-params']
-        self.assertEqual(len(invalid_params), 1)
-        bad_token = invalid_params[0]
-        self.assertEqual(bad_token['name'], 'token')
+class SnapPassAPIv3TestCase(TestCase):
+
+    def setUp(self):
+        snappass.app.config['TESTING'] = True
+        self.app = snappass.app.test_client()
+
+    def test_create_secret(self):
+        rv = self.app.post(
+            '/api/v3/secrets',
+            json={'ciphertext': 'encrypted-payload', 'ttl': 3600},
+            content_type='application/json',
+        )
+        self.assertEqual(201, rv.status_code)
+        data = rv.get_json()
+        self.assertIn('key', data)
+        self.assertEqual(3600, data['ttl'])
+
+    def test_create_secret_default_ttl(self):
+        rv = self.app.post(
+            '/api/v3/secrets',
+            json={'ciphertext': 'encrypted-payload'},
+            content_type='application/json',
+        )
+        self.assertEqual(201, rv.status_code)
+        data = rv.get_json()
+        self.assertEqual(snappass.DEFAULT_API_TTL, data['ttl'])
+
+    def test_create_secret_no_ciphertext(self):
+        rv = self.app.post(
+            '/api/v3/secrets',
+            json={'ciphertext': ''},
+            content_type='application/json',
+        )
+        self.assertEqual(400, rv.status_code)
+
+    def test_create_secret_excessive_ttl(self):
+        rv = self.app.post(
+            '/api/v3/secrets',
+            json={'ciphertext': 'data', 'ttl': 99999999},
+            content_type='application/json',
+        )
+        self.assertEqual(400, rv.status_code)
+
+    def test_check_secret_exists(self):
+        rv = self.app.post(
+            '/api/v3/secrets',
+            json={'ciphertext': 'check-me', 'ttl': 3600},
+            content_type='application/json',
+        )
+        key = rv.get_json()['key']
+
+        rv2 = self.app.head(f'/api/v3/secrets/{key}')
+        self.assertEqual(200, rv2.status_code)
+
+    def test_check_secret_not_found(self):
+        rv = self.app.head('/api/v3/secrets/snappassnonexistent')
+        self.assertEqual(404, rv.status_code)
+
+    def test_retrieve_secret(self):
+        rv = self.app.post(
+            '/api/v3/secrets',
+            json={'ciphertext': 'retrieve-me', 'ttl': 3600},
+            content_type='application/json',
+        )
+        key = rv.get_json()['key']
+
+        rv2 = self.app.get(f'/api/v3/secrets/{key}')
+        self.assertEqual(200, rv2.status_code)
+        self.assertEqual('retrieve-me', rv2.get_json()['ciphertext'])
+
+    def test_retrieve_secret_deletes(self):
+        rv = self.app.post(
+            '/api/v3/secrets',
+            json={'ciphertext': 'one-time', 'ttl': 3600},
+            content_type='application/json',
+        )
+        key = rv.get_json()['key']
+
+        self.app.get(f'/api/v3/secrets/{key}')
+        rv2 = self.app.get(f'/api/v3/secrets/{key}')
+        self.assertEqual(404, rv2.status_code)
+
+    def test_retrieve_secret_not_found(self):
+        rv = self.app.get('/api/v3/secrets/snappassnonexistent')
+        self.assertEqual(404, rv.status_code)
+
+    def test_full_lifecycle(self):
+        """Create, check exists, retrieve, verify gone."""
+        # Create
+        rv = self.app.post(
+            '/api/v3/secrets',
+            json={'ciphertext': 'lifecycle-test', 'ttl': 3600},
+            content_type='application/json',
+        )
+        self.assertEqual(201, rv.status_code)
+        key = rv.get_json()['key']
+
+        # Check exists
+        rv2 = self.app.head(f'/api/v3/secrets/{key}')
+        self.assertEqual(200, rv2.status_code)
+
+        # Retrieve
+        rv3 = self.app.get(f'/api/v3/secrets/{key}')
+        self.assertEqual(200, rv3.status_code)
+        self.assertEqual('lifecycle-test', rv3.get_json()['ciphertext'])
+
+        # Verify gone
+        rv4 = self.app.head(f'/api/v3/secrets/{key}')
+        self.assertEqual(404, rv4.status_code)
+
+        rv5 = self.app.get(f'/api/v3/secrets/{key}')
+        self.assertEqual(404, rv5.status_code)
 
 
 if __name__ == '__main__':
