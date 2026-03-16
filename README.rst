@@ -2,6 +2,22 @@
 SnapPass
 ========
 
+.. image:: https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/snappass
+   :target: https://artifacthub.io/packages/search?repo=snappass
+   :alt: Artifact Hub
+
+.. image:: https://github.com/lmacka/snappass/actions/workflows/ci.yml/badge.svg?branch=master
+   :target: https://github.com/lmacka/snappass/actions/workflows/ci.yml
+   :alt: CI
+
+.. image:: https://img.shields.io/github/v/release/lmacka/snappass
+   :target: https://github.com/lmacka/snappass/releases
+   :alt: GitHub Release
+
+.. image:: https://img.shields.io/docker/pulls/lmacka/snappass
+   :target: https://hub.docker.com/r/lmacka/snappass
+   :alt: Docker Pulls
+
 A zero-knowledge, one-time secret sharing web app. Fork of `Pinterest's SnapPass <https://github.com/pinterest/snappass>`_ with major security and architecture upgrades.
 
 Share a secret by generating a link. The recipient opens the link, reveals the secret once, and it's permanently deleted. The server never sees your plaintext — encryption and decryption happen entirely in the browser.
