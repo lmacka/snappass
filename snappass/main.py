@@ -71,11 +71,26 @@ DEFAULT_API_TTL = 1209600
 MAX_TTL = DEFAULT_API_TTL
 MAX_CIPHERTEXT_SIZE = 10240  # 10KB max
 
-# Rate limiting
+
+# Rate limiting — build Redis URI for limiter from available env vars
+def _get_limiter_storage_uri():
+    if os.environ.get('MOCK_REDIS'):
+        return 'memory://'
+    if os.environ.get('REDIS_URL'):
+        return os.environ['REDIS_URL']
+    host = os.environ.get('REDIS_HOST', 'localhost')
+    port = os.environ.get('REDIS_PORT', 6379)
+    password = os.environ.get('REDIS_PASSWORD')
+    db = os.environ.get('SNAPPASS_REDIS_DB', 0)
+    if password:
+        return f'redis://:{password}@{host}:{port}/{db}'
+    return f'redis://{host}:{port}/{db}'
+
+
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    storage_uri=os.environ.get('REDIS_URL', 'memory://'),
+    storage_uri=_get_limiter_storage_uri(),
     default_limits=[],
 )
 
