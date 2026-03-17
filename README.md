@@ -66,7 +66,7 @@ This fork rewrites the security model while keeping the same simple UX. Key diff
 - Decryption keys don't appear in server logs, proxy logs, or access logs
 - Redis contains only ciphertext that is useless without the URL fragment
 
-**Security hardening** - Response headers (CSP, X-Frame-Options, Referrer-Policy, etc.), per-endpoint rate limiting, input size validation (10KB max), and a randomized `SECRET_KEY` default with a warning.
+**Security hardening** - Response headers (CSP, X-Frame-Options, Referrer-Policy, etc.), per-endpoint rate limiting, input size validation (10KB max), and a randomized `SECRET_KEY` default.
 
 **Modernized stack** - Python 3.12, Flask 3.1, `pyproject.toml` packaging. Removed all vendored EOL libraries: Bootstrap 3, jQuery, Font Awesome 4, Clipboard.js (over 1MB of dead weight). Replaced with ~300 lines of vanilla CSS and JS with the same dark theme.
 
@@ -136,7 +136,7 @@ All configuration is via environment variables. Start by ensuring Redis is runni
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SECRET_KEY` | Signs Flask sessions. If unset, a random key is generated on startup with a warning. Set in production. | random |
+| `SECRET_KEY` | Signs Flask sessions. If unset, a random key is generated on startup. | random |
 | `REDIS_URL` | Full Redis connection URL. Takes precedence over host/port/db. Example: `redis://user:pass@localhost:6379/0` | - |
 | `REDIS_HOST` | Redis hostname | `localhost` |
 | `REDIS_PORT` | Redis port | `6379` |
@@ -275,6 +275,25 @@ $ flake8 --max-line-length=120
 ```
 
 CI runs tests across Python 3.10, 3.11, and 3.12 via tox.
+
+## Contributing
+
+Development happens on the `dev` branch. Push to `dev` builds a `dev`-tagged Docker image automatically.
+
+**Patch releases** are automated. Merge a PR to `master` with the `release` label (or from dependabot) and the pipeline will:
+
+1. Bump the patch version in `snappass/__init__.py` and `pyproject.toml`
+2. Commit, tag, and push to `master`
+3. Build and push multi-arch Docker images
+4. Dispatch to [helm-snappass](https://github.com/lmacka/helm-snappass) to auto-bump the chart
+
+**Minor or major releases** require a manual version bump before merging:
+
+1. Update `snappass/__init__.py` (`__version__`) and `pyproject.toml` (`version`)
+2. Merge the PR to `master` **without** the `release` label (to skip the auto-bump)
+3. Tag manually: `git tag v<version> && git push origin master --tags`
+
+The tag push triggers the same Docker build and GitHub release as the auto pipeline.
 
 ## Origins
 
