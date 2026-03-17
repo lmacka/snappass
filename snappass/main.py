@@ -30,15 +30,13 @@ HOST_OVERRIDE = os.environ.get('HOST_OVERRIDE', None)
 
 # Initialize Flask Application
 app = Flask(__name__)
-if os.environ.get('DEBUG'):
+if strtobool(os.environ.get('DEBUG', 'False')):
     app.debug = True
 
 if os.environ.get('SECRET_KEY'):
     app.secret_key = os.environ['SECRET_KEY']
 else:
     app.secret_key = os.urandom(32).hex()
-    print('WARNING: SECRET_KEY not set, using random key. '
-          'Sessions will not persist across restarts.', file=sys.stderr)
 
 app.config.update(
     dict(STATIC_URL=os.environ.get('STATIC_URL', 'static')))
